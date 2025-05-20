@@ -23,3 +23,4 @@ tqdm
 transformers
 types-requests
 python-dotenv
+transformer-lens

@@ -1,5 +1,5 @@
 # Base image with Python
-FROM mcr.microsoft.com/devcontainers/python:1-3.12-bullseye
+FROM mcr.microsoft.com/devcontainers/python:1-3.11-bullseye
 
 ARG USERNAME=vscode
 

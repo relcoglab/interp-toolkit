@@ -18,6 +18,7 @@ types-requests
 h5py
 python-dotenv
 statsmodels
+scipy>=1.13.1
 huggingface-hub
 invoke
 jupyter

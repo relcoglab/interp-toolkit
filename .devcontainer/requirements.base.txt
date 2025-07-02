@@ -7,6 +7,7 @@ huggingface-hub
 isort
 jax[cuda12]
 jupyter
+jupyterlab
 jupyter_http_over_ws
 matplotlib
 mypy
@@ -17,10 +18,11 @@ protobuf
 pytest
 requests
 seaborn
-statsmodels
+# statsmodels
 torch
 tqdm
 transformers
 types-requests
 python-dotenv
 transformer-lens
+

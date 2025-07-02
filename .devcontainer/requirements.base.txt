@@ -18,7 +18,7 @@ protobuf
 pytest
 requests
 seaborn
-# statsmodels
+statsmodels
 torch
 tqdm
 transformers

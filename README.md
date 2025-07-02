@@ -1,7 +1,25 @@
-# rc-lab-template
-Templates for RC lab code
+# interp-toolkit
+
+Relational Cognition Lab codebase for mechanistic interpretability. Dependencies and devcontainer settings are inherited from rc-lab-template.
+
 
 ## Setup
+
+
+Use Python version 3.11 as the interpreter for Jupyter, as dependencies are only installed for this version and not others that may be partially available.
+
+
+
+
+
+
+
+
+
+
+
+## General Notes about Container Set-Up
+
 
 This repo is setup to use VSCode and the Dev Containers plugin. Please make sure you've installed both before continuing.
 
@@ -13,11 +31,9 @@ This repo is setup to use VSCode and the Dev Containers plugin. Please make sure
 4. Find and replace `my_project` with `my_specific_project_name`.
 5. Copy the `.env.template` file to `.env` and edit the contents with your values.
 
-## Examples
 
-To get started, open the file [`notebooks/example.ipynb`](notebooks/example.ipynb) in VSCode and run it (install jupyter extensions if asked). 
 
-## Adding packages
+
 
 ### Python packages
 

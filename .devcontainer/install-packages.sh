@@ -19,6 +19,14 @@ set -ex
 echo "Running .devcontainer/setup.sh to install additional packages..."
 # Example: apt-get update && apt-get install --no-install-recommends -y vim
 
+# pip install git+https://github.com/TransformerLensOrg/TransformerLens
+# python -c "import sys, torch; print(sys.executable); print(torch.__version__); print(torch.__file__)"
+
+
+# pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+#   --index-url https://download.pytorch.org/whl/cu118
+
+
 # Install Miniconda
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
     bash /tmp/miniconda.sh -b -p /opt/conda && \

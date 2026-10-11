@@ -30,8 +30,6 @@ requests
 seaborn
 sentencepiece
 tqdm
-transformers
-torch
 plotly
 
 # dev dependencies

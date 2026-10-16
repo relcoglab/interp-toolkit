@@ -26,6 +26,9 @@ echo "Running .devcontainer/setup.sh to install additional packages..."
 # pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
 #   --index-url https://download.pytorch.org/whl/cu118
 
+# pip install torch==2.6.0 torchvision torchaudio --index-url https://pytorch.org
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+  --index-url https://download.pytorch.org/whl/cu124
 
 # Install Miniconda
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \

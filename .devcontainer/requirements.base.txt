@@ -6,7 +6,6 @@ h5py
 huggingface-hub
 isort
 jax[cuda12]
-transformer-lens
 jupyter
 jupyterlab
 jupyter_http_over_ws
@@ -26,4 +25,4 @@ tqdm
 transformers
 types-requests
 python-dotenv
-
+transformer-lens

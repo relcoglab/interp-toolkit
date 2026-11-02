@@ -31,6 +31,7 @@ seaborn
 sentencepiece
 tqdm
 plotly
+pathlib
 
 # dev dependencies
 black

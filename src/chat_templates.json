@@ -1,0 +1,6 @@
+  {
+    "llama": "<|begin_of_text|>\n<|start_header_id|>system<|end_header_id|>\n{system_prompt}\n<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n{user_prompt}\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n",
+    "qwen": "<|im_start|>system\n{system_prompt}.<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
+    "gemma": "<start_of_turn>{system_prompt}.user{user_prompt}<end_of_turn><start_of_turn>model\n",
+    "mistral": "<s>[SYSTEM_PROMPT]{system_prompt}[/SYSTEM_PROMPT][INST]{user_prompt}[/INST]\n"
+  }

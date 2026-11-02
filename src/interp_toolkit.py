@@ -4,9 +4,87 @@ from typing import Optional, List, Union, Tuple
 import einops
 from transformer_lens.model_bridge import TransformerBridge
 from transformer_lens.hook_points import HookPoint
+from pathlib import Path
+import json
+import os
 
 #device should be set once as a global variable and then always used
 #we may need make some classes to do this
+
+ROOT_PATH = Path(__file__).resolve().parent
+
+
+#PROMPT UTILS
+
+def load_chat_template(model_name, template_path=None):
+    """
+    Reads chat_templates.json and returns the template for the given model name.
+    """
+    if template_path is None:
+        template_path = ROOT_PATH /"chat_templates.json"
+    template_path = Path(template_path)
+
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"Could not find template file: {template_path}")
+
+    with open(template_path, "r") as f:
+        templates = json.load(f)
+
+    if model_name not in templates:
+        raise KeyError(
+            f"No chat template for '{model_name}'. Available: {list(templates.keys())}"
+        )
+
+    return templates[model_name]
+
+
+def create_prompt(model_family, system_message, user_message):
+    """Pulls up the appropriate template for the model family from chat template library stored in 
+    chat_templates and formats it with the system and user messages. 
+    Suggested use is to loop through stimuli overtop this function."""
+
+    template = load_chat_template(model_family)
+    final_prompt = template.format(system_prompt = system_message, user_prompt=user_message)
+    #return the result
+    return final_prompt
+
+
+#GPU UTILS
+
+def test_gpus():
+    if torch.cuda.is_available():
+        print(f"Number of GPUs available: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            gpu_name = torch.cuda.get_device_name(i)
+            print(f"GPU {i}: {gpu_name}")
+            # Allocate a tensor on each GPU to test if it's functioning properly
+            try:
+                x = torch.randn((1000, 1000), device=f"cuda:{i}")
+                print(f"Successfully created tensor on GPU {i}")
+            except Exception as e:
+                print(f"Failed to create tensor on GPU {i}: {e}")
+    else:
+        print("No GPUs are available.")
+
+def clear_gpu_memory():
+    #if GPU memory error, clear the GPU cache. If not working, restart the kernel / juypter notebook
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.set_grad_enabled(False)
+
+# DISK UTILS
+def delete_hf_model_cache(model_path):
+    cache_name = "models--" + model_path.replace("/", "--")
+    cache_path = os.path.join(HF_HUB_CACHE, cache_name)
+    if os.path.exists(cache_path):
+        shutil.rmtree(cache_path, ignore_errors=True)
+        print(f"  removed disk cache: {cache_path}")
+    else:
+        print(f"  no disk cache at: {cache_path}")
+
+
+#MODEL BASICS
 
 def load_model(
     model_name: str,
@@ -52,6 +130,7 @@ def load_model(
     except Exception as e:
         raise RuntimeError(f"Problem with loading model '{model_name}': {str(e)}")
 
+
 def return_model_parameters(model):
     """
     Returns a dictionary of model parameters with their names and shapes.
@@ -75,14 +154,14 @@ def generate(model, input_text: str, max_new_tokens: int = 50) -> str:
     return generated_text
 
 
-
-def get_hidden(
+def get_activations(
     model: transformer_lens.model_bridge.transformer_bridge.TransformerBridge,
     input_text: Union[str, List[str]],
     layer: Optional[int] = None,
+    token_pos: Optional[int] = None,
     return_type: str = "residual"
 ) -> torch.Tensor:
-    """Given some model and input, the get_hidden function retrieves the hidden layers in the residual stream."""
+    """Given some model and input, the get_activations function retrieves the hidden layers in the residual stream."""
 
     valid_return_types = ("residual", "mlp", "attn")
 
@@ -119,6 +198,10 @@ def get_hidden(
         key = f"{key_prefix}.{layer}.{key_suffix}"
         activations = cache[key]
         
+    if token_pos is not None:
+        # Get specific token's activations
+        activations = activations[:, :, token_pos, :]
+        
     else:
         # Collect activations for all layers
         activations = []
@@ -128,3 +211,4 @@ def get_hidden(
         activations = torch.stack(activations, dim=0)  # (n_layers, batch, seq_len, d_model)
 
     return activations,logits
+

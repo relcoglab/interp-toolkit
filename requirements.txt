@@ -39,3 +39,5 @@ isort
 mypy
 pytest
 types-requests
+
+circuitsvis

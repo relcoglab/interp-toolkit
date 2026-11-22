@@ -12,8 +12,12 @@ import os
 from dotenv import load_dotenv
 from typing import Literal
 import gc
-import detach
 import numpy as np
+import re
+import warnings
+from contextlib import suppress
+
+
 
 #device should be set once as a global variable and then always used
 #we may need make some classes to do this
@@ -119,6 +123,7 @@ def clear_gpu_memory():
     torch.set_grad_enabled(False)
 
 # DISK UTILS
+
 def delete_hf_model_cache(model_path):
     cache_name = "models--" + model_path.replace("/", "--")
     cache_path = os.path.join(HF_HUB_CACHE, cache_name)
@@ -128,6 +133,26 @@ def delete_hf_model_cache(model_path):
     else:
         print(f"  no disk cache at: {cache_path}")
 
+#PLOT UTILS
+
+def imshow(tensor, renderer=None, xaxis="", yaxis="", **kwargs):
+    px.imshow(
+        utils.to_numpy(tensor),
+        color_continuous_midpoint=0.0,
+        color_continuous_scale="RdBu",
+        labels={"x": xaxis, "y": yaxis},
+        **kwargs,
+    ).show(renderer)
+
+
+def line(tensor, renderer=None, xaxis="", yaxis="", **kwargs):
+    px.line(y=utils.to_numpy(tensor), labels={"x": xaxis, "y": yaxis}, **kwargs).show(renderer)
+
+
+def scatter(x, y, xaxis="", yaxis="", caxis="", renderer=None, **kwargs):
+    x = utils.to_numpy(x)
+    y = utils.to_numpy(y)
+    px.scatter(y=y, x=x, labels={"x": xaxis, "y": yaxis, "color": caxis}, **kwargs).show(renderer)
 
 #MODEL BASICS
 
@@ -207,76 +232,119 @@ def generate(model, input_text: str, max_new_tokens: int = 50) -> str:
 
 def get_activations(
     model: transformer_lens.model_bridge.transformer_bridge.TransformerBridge,
-    input_text: Union[str, List[str]],
-    layer: int,
-    token_pos: int,
-    hook_type: Literal["residual_pre", "residual_post", "mlp", "attn"] = None,
-) -> torch.Tensor:
-    """Given some model and input, the get_activations function retrieves the hidden layers in the residual stream."""
+    input_text: Union[str, List[str]], 
+    token_pos: Union[int, tuple],
+    hook_type_filter: str = None,
+    stop_at_layer: int = None) -> torch.Tensor:
 
-    valid_hook_types = ["residual_pre", "residual_post", "mlp", "attn"]
-    if hook_type not in valid_hook_types:
-        raise ValueError(f"hook_type must be one of {valid_hook_types}")
+    
+    """Given some model and input,
+      the get_activations function retrieves the hidden layers in the residual stream.
+      
+      model: TransformerBidge model object
+      input_text: the (fully formatted) input prompt for the model or list of prompts for batch processing
+      hook_type_filter: name filter to specify the type of hook to use for extracting activations; 
+      stop_at_layer: the layer at which to stop extracting activations (if None, returns all)
+      token_pos: the token position from which to extract activations (if none returns all)
+      
+      returns  cache, logits:
+        cache: a dict containing tensors, keyed by name         
+        logits: a tensor containing the logits for the specified layer and token position
 
-    if layer is not None and (layer < 0 or layer >= model.cfg.n_layers):
-        raise ValueError(f"layer must be between 0 and {model.cfg.n_layers-1}")
+        This basically returns any number of hook points simultaneously. 
+        To get tensors out of the cache, must filter by name and turn into a list of tensors.
+        Use filter_activation_cache() to return tensors for singular hook points.
+      """
 
-    # Tokenize input
+    #tokenize the prompt input
+    #tokens must bea list of tokenized inputs, one for each prompt in the batch
     if isinstance(input_text, str):
         input_text = [input_text]
+    tokens = model.to_tokens(input_text) 
 
-    tokens = model.to_tokens(input_text) #this is a list of tokenized inputs, one for each prompt in the batch
 
-    # Run model with cache to collect activations and logits
-    logits, cache = model.run_with_cache(tokens, remove_batch_dim=False, device=model.cfg.device)
+    # run model with cache to collect activations and logits
+    # using the names filter saves memory so we add it directly here
+    # # same with token positions. note we can pass a tuple to get a slice 
 
-    # Select activation 'hook' type
-    if hook_type == "residual_post":
-        key_prefix = "blocks"
-        key_suffix = "hook_resid_post"
+    if(hook_type_filter is None):
+            hook_type_filter = ".*"  # Match all if no filter is provided
 
-    elif hook_type == "residual_pre":
-        key_prefix = "blocks"
-        key_suffix = "hook_resid_pre"
+    #there is an annoying user warning generated when hook types are filtered that we want to ignore
+    with warnings.catch_warnings():
 
-    elif hook_type == "mlp":
-        key_prefix = "blocks"
-        key_suffix = "hook_mlp_out"
+        warnings.filterwarnings('ignore', category=UserWarning)
 
-    elif hook_type == "attn":
-        key_prefix = "blocks"
-        key_suffix = "hook_attn_out"
+        logits, cache = model.run_with_cache(tokens,
+                                          remove_batch_dim=False, 
+                                          device=model.cfg.device, 
+                                          pos_slice=token_pos,
+                                          stop_at_layer=stop_at_layer,
+                                          names_filter = lambda s: bool(re.search(hook_type_filter, s)))
 
-    # extract activations
+
+    return cache,logits
+
+def filter_activation_cache(cache, model,hook_name: str, layer=None):
+
+
+    """ Takes an activation cache (a dictionary object) and returns a list of tensors
+    Provide the requested hook name (must be unique) and a cache object.
+    Returns activations: a list of tensors indexed by layer.
+
+    This can be useful for organizing activation caches by layer into a tensor.
+
+    Activation cache dimensions:(n_layers, batch, num tokens, d_model)
+
+    Check that there is a valid input layer given the # layers of the model passed 
+    if layer is not None and (layer < 0 or layer >= model.cfg.n_layers):
+        raise ValueError(f"layer must be between 0 and {model.cfg.n_layers-1}") """
+
+    activations = []
+
+    key_prefix = 'blocks'
+
+
     if layer is not None:
-        # Get specific layer's activations
-        key = f"{key_prefix}.{layer}.{key_suffix}"
-        activations = cache[key] # dimensions: (batch, num tokens in input, d_model)
-            
-        if token_pos is not None:
-            # get specific token position activations
-            activations = activations[:,token_pos, :]  
-        
+        if layer < 0 or layer >= model.cfg.n_layers:
+            raise ValueError(f"layer must be between 0 and {model.cfg.n_layers-1}")
+        key = f"{key_prefix}.{layer}.{hook_name}"
+        if key in cache:
+            layer_cache = cache[key]
+            these_dims = layer_cache.shape
+            activations.append(layer_cache)
+        else:
+            print('Error: key not found in cache. Returning a tensor of zeros.')
+            layer_cache = torch.zeros((1, 1, model.cfg.d_model), device=model.cfg.device) #if the key is not found, return a tensor of zeros with the correct shape
+            activations.append(layer_cache)
     else:
-        # Collect activations for all layers
-        activations = []
+        layer_cache = []
+        
         for l in range(model.cfg.n_layers):
-            key = f"{key_prefix}.{l}.{key_suffix}"
-            activations.append(cache[key])
-        activations = torch.stack(activations, dim=0)  
+
+            key = f"{key_prefix}.{l}.{hook_name}"
+
+            if key in cache:
+                layer_cache = cache[key]  
+                these_dims = layer_cache.shape
+                
+            elif layer_cache != []:
+                print('Error: key not found in cache. Returning a tensor of zeros.')
+                layer_cache = torch.zeros((layer_cache.shape), device=model.cfg.device) #if the key is not found, return a tensor of zeros with the correct shape
+            
+            activations.append(layer_cache)        
+        
+
+    print(f"Returning tensor with dimensions: {len(activations)} layers, {these_dims[0]} prompt batch(es), {these_dims[1]} token(s), {these_dims[2]} model dimensions")
+    activations = torch.stack(activations, dim=0)  
 
 
-        if token_pos is not None:
-            # get specific token position activations
-            activations = activations[:, :,token_pos, :] # dimensions:(n_layers, batch,  num tokens in input, d_model)
-
-    return activations,logits
+    return activations
 
 def get_pooled_activations(model, 
                            prompt: str,
-                            layer: int, 
-                            token_pos_indices: range, 
-                            hook_type: str):
+                           token_pos_indices: tuple[int], 
+                           hook_name: str):
     """
     Get activations for a given prompt and layer, pooling across specified token positions.
     
@@ -285,23 +353,32 @@ def get_pooled_activations(model,
         prompt: The (fully formatted) input prompt for the model.
         layer: The layer from which to extract activations.
         token_pos_indices: a range of token position indices to pool over.
-        hook_type: The type of hook to use for extracting activations; options: "residual_pre", "residual_post", "mlp", "attn"
+        hook_name: The exact name of the hook to use for extracting activations.
         
     Returns:
         A tensor containing the pooled activations across the specified token positions.
     """
-    pooled_activations = []
-    # print(token_pos_indices)
-    for token_pos in token_pos_indices:
-        activations, _ = get_activations(model = model, input_text = prompt, layer=layer, token_pos=token_pos, hook_type=hook_type)
-        pooled_activations.append(activations)
+    print(token_pos_indices)
 
+    #pass a single or a batch of prompts, a range of token indices, and 
+    activation_cache, _ = get_activations(model = model, 
+                                           input_text = prompt,
+                                           token_pos=token_pos_indices,
+                                           hook_type_filter=hook_name)
 
     
-    # Pooling by taking the mean across the specified token positions
-    pooled_activations_tensor = torch.mean(torch.stack(pooled_activations), dim=0)
+    activation_tensor = filter_activation_cache(activation_cache, model, hook_name=hook_name)
+    # print(f"Activation tensor shape: {activation_tensor.shape} (layers, batch, tokens, d_model)")
+    
+    # Pooling by taking the mean across the token position dimension
+    pooled_activations_tensor = torch.mean(activation_tensor, dim=2) 
+    these_dims = pooled_activations_tensor.shape
+    print(f"Returning tensor with dimensions:  {these_dims[0]} layers, {these_dims[1]} prompt batch(es), {these_dims[2]} model dimensions")
+       
     
     return pooled_activations_tensor
+
+### FUNCTIONALITY FOR MEANS DIFFERENCE VECTOR EXTRACTION AND PROJECTION
 
 def extract_activation_vector(model,
                             model_family: str,
@@ -309,8 +386,7 @@ def extract_activation_vector(model,
                             negative_stimuli: list[str], 
                             token_indices_positive: list[tuple[int]], 
                             token_indices_negative: list[tuple[int]], 
-                            hook_type: str,
-                            layer: int,
+                            hook_name: str,
                             system_message: str = '') -> dict:
         
         
@@ -325,7 +401,7 @@ def extract_activation_vector(model,
     negative_stimuli: the list of negative stimuli.
     token_indices_positive: the list of token positions for the positive stimuli.
     token_indices_negative: the list of token positions for the negative stimuli.
-    hook_type: the type of hook to use for extracting activations.
+    hook_name: the exact name of hook to use for extracting activations.
     layer: the layer from which to extract activations.
     system_message: an optional system message to include in all stimuli.
 
@@ -333,8 +409,8 @@ def extract_activation_vector(model,
     """
 
 
-    #loop through all positive stimuli and collect activations
     all_positive_activations = []
+
 
     for stim in positive_stimuli:
 
@@ -342,20 +418,21 @@ def extract_activation_vector(model,
         this_prompt = create_prompt(model_family, system_message, stim)
 
         #identify the range of token positions to pool over (could be one token position)
-        these_token_inds = range(token_indices_positive[positive_stimuli.index(stim)][0], token_indices_positive[positive_stimuli.index(stim)][1])
+        these_token_inds = (token_indices_positive[positive_stimuli.index(stim)][0], token_indices_positive[positive_stimuli.index(stim)][1])
   
         #get the pooled activations across this range of tokens
         this_pooled_activation = get_pooled_activations(model = model, 
                                                         prompt=this_prompt, 
-                                                        layer=layer,
                                                         token_pos_indices=these_token_inds,                                                          
-                                                        hook_type=hook_type )
+                                                        hook_name=hook_name)
 
         #add to list of mean activations
         all_positive_activations.append(this_pooled_activation[:,0,:]) #remove the batch dimension, which is 1 because we are only passing one prompt at a time
     
     #create average of the positive activations across all positive stimuli
+    #this has shape: n_stim, n-layers, d_model. We want to average across the n_stim dimension, which is 0
     mean_positive_activation = torch.stack(all_positive_activations).mean(0)
+    
 
 
     #loop through all negative stimuli and collect activations
@@ -366,15 +443,18 @@ def extract_activation_vector(model,
         this_prompt = create_prompt(model_family, system_message, stim)
 
         #identify the range of token positions to pool over (could be one token position)
-        these_token_inds = range(token_indices_negative[negative_stimuli.index(stim)][0], token_indices_negative[negative_stimuli.index(stim)][1])
+        these_token_inds = (token_indices_negative[negative_stimuli.index(stim)][0], token_indices_negative[negative_stimuli.index(stim)][1])
 
         #get the pooled activations across this range of tokens
-        this_pooled_activation = get_pooled_activations(model, this_prompt, layer=layer, hook_type=hook_type, token_pos_indices=these_token_inds)
-
-        #add to list of mean activations
+        this_pooled_activation = get_pooled_activations(model = model, 
+                                                        prompt=this_prompt, 
+                                                        token_pos_indices=these_token_inds,                                                          
+                                                        hook_name=hook_name) #add to list of mean activations
+        
         all_negative_activations.append(this_pooled_activation[:,0,:]) #remove the batch dimension, which is 1 because we are only passing one prompt at a time
 
     #create average of the negative activations across all negative stimuli
+    #this has shape: n_stim, n-layers, d_model. We want to average across the n_stim dimension, which is 0
     mean_negative_activation = torch.stack(all_negative_activations).mean(0)
 
     #calculate the direction vector by subtracting the mean negative activation from the mean positive activation
@@ -382,7 +462,8 @@ def extract_activation_vector(model,
     direction = direction / direction.norm()
 
     assert direction.shape[-1] == model.cfg.d_model, f"Error: Direction vector shape {direction.shape} does not match model dimension {model.cfg.d_model}"
-
+    print(f"Returning tensor with dimensions:  {direction.shape[0]} layers,  {direction.shape[1]} model dimensions")
+        
     del all_negative_activations, all_positive_activations, mean_negative_activation, mean_positive_activation
     gc.collect()     
     torch.cuda.empty_cache()    
@@ -392,8 +473,8 @@ def extract_activation_vector(model,
 def project_stimuli_onto_direction(stimuli: list[str],
                                 model: transformer_lens.model_bridge.transformer_bridge.TransformerBridge,
                                 activation_direction: torch.Tensor,
-                                hook_type: str,
-                                token_ind: int = -1,
+                                hook_name: str,
+                                token_ind: Union[int, tuple],
                                 system_message: str = '',
                                 layer: int = None):
 
@@ -404,6 +485,12 @@ def project_stimuli_onto_direction(stimuli: list[str],
     # If no layer is specified, it will return ALL layers 
     # Returns projections, which has dims (n stimuli) if a specific layer is indicated,
     # otherwise has dims nstimuli, nlayers.
+
+    #stimuli: list of stimuli to project onto the activation direction.
+    #activation_direction: the activation direction vector to project onto.
+    #hook_name: exact hook name to use for extracting activations.
+    #token_ind: the token position or tuple of indices from which to extract activations;
+    #system_message: an optional system message to include in all stimuli.
 
     #note that this is weird because then you are projecting from each layer of the stimuli to one
     #specific direction presumably derived from a specific layer.
@@ -418,45 +505,59 @@ def project_stimuli_onto_direction(stimuli: list[str],
         this_prompt = create_prompt(MODEL_FAMILY, system_message, stim)
         prompts_batch.append(this_prompt)
 
-    #get activations for each of the stimuli
-    #if layer is None, it does all layers 
-    these_activations, _ = get_activations(
+
+    #get activations for all of the stimuli in all layers
+    activation_cache, _ = get_activations(
                         model = model,
                         input_text = prompts_batch,
-                        layer =  layer,
                         token_pos= token_ind,
-                        hook_type = hook_type)
-    #return has dims (n stimuli, d_model) if layer is specified, else (n_layers, n stimuli, d_model)
+                        hook_type_filter = hook_name)
     
+    #these_activations has dims [n_layers, batch, tokens, d_model]
+    # print(activation_cache['blocks.0.hook_' + hook_name].shape)
+
+    #create tensor with dimensions [n_layers, batch, tokens, d_model] 
+    activation_tensor = filter_activation_cache(activation_cache, model, hook_name=hook_name)
+
+
+    #collapse across the token dimension, leaving only the layer and d_model dimensions
+    activation_tensor = torch.mean(activation_tensor, dim=(2)) 
     #normalizes the activations to unit length; applies to last dimension, which is d_model, thus the activations
-    these_activation_norm = these_activations / these_activations.norm(dim=-1, keepdim=True)    
+    # activation_norm = activation_tensor / activation_tensor.norm(dim=-1, keepdim=True)    
 
     #move to cpu because otherwise there is an error in numpy;it needs things on cpu for some reason
-    these_activations_norm = these_activations.float()
-    these_activations_norm = these_activations_norm / (
-    these_activations_norm.norm(dim=-1, keepdim=True).clamp_min(torch.finfo(torch.float32).eps)) #copilot wrote this last part.
+    activation_tensor = activation_tensor.float()
+    activation_norm= activation_tensor / (
+    activation_tensor.norm(dim=-1, keepdim=True).clamp_min(torch.finfo(torch.float32).eps)) #copilot wrote this last part.
    
-    these_activations_norm = these_activations_norm.detach().cpu().numpy()
+    activation_norm = activation_norm.detach().cpu().numpy()
+
     activation_direction = activation_direction.float().detach().cpu().numpy()
 
-    #if the activation direction is provided for all layers, then project layerwise
-    if activation_direction.ndim == 2 and activation_direction.shape[0] == model.cfg.n_layers:
+    assert activation_norm.ndim == 3, f"Error: Activation tensor has {activation_norm.ndim} dimensions; expected 3 dimensions (n_layers, batch, d_model)."
 
-        # Project each layer's activations onto the corresponding activation direction
+    #if the activation direction is provided for all layers, then project layerwise
+    if activation_direction.ndim > 1 and activation_direction.shape[0] == model.cfg.n_layers:
+
+        # project each layer's activations onto the corresponding activation direction
         for layer_idx in range(model.cfg.n_layers):
-            layer_activations = these_activations_norm[layer_idx,:,:]
+
+            layer_activations = activation_norm[layer_idx,:,:]
             layer_direction = activation_direction[layer_idx,:]
+
             layer_projections = np.inner(layer_activations, layer_direction)
+            
             if layer_idx == 0:
                 projections = layer_projections
             else:
                 projections = np.vstack((projections, layer_projections))   
+
     elif activation_direction.ndim == 1:
-        # Project activations onto the single activation direction provided       
-        projections = np.inner(these_activations_norm,activation_direction)
+        # project activations onto the single activation direction provided       
+        projections = np.inner(activation_norm,activation_direction)
 
 
-
+    print(f"Returning projections with dimensions: {projections.shape[0]} layers, {projections.shape[1]} prompt batch(es)")
     gc.collect()
     torch.cuda.empty_cache()
 
